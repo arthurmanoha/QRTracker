@@ -1,0 +1,90 @@
+import bpy
+
+allCodes = "APRILTAG_36H11_ID_001111111111100000000110110101011001110101100110000110101000011001011001100001000110000000011111111111APRILTAG_36H11_ID_011111111111100000000110110110011001011101101111000110011000011010110101100010010110000000011111111111APRILTAG_36H11_ID_021111111111100000000110110111011001001001101000000110001001011000010001100011100110000000011111111111APRILTAG_36H11_ID_031111111111100000000110111001011000011101101001110110101001011011001001100110000110000000011111111111APRILTAG_36H11_ID_041111111111100000000110111010011011110001101011110110001010011010000001101000100110000000011111111111APRILTAG_36H11_ID_051111111111100000000110111100011011000101101101100110101011011000111001101011000110000000011111111111APRILTAG_36H11_ID_061111111111100000000110000001011001011001101010010110011101011000001001100001010110000000011111111111APRILTAG_36H11_ID_071111111111100000000110000100011000011001100101000110101110011000011101100101000110000000011111111111APRILTAG_36H11_ID_081111111111100000000110001000011010101101100001110110011111011011101001101011010110000000011111111111APRILTAG_36H11_ID_091111111111100000000110001001011010010101101010110110010000011001000101101100100110000000011111111111APRILTAG_36H11_ID_101111111111100000000110001101011000111101101110100110010001011010111001100001100110000000011111111111APRILTAG_36H11_ID_111111111111100000000110001111011011111101101001010110100010011011001101100101010110000000011111111111APRILTAG_36H11_ID_121111111111100000000110010000011011101001100010010110010011011000101001100110100110000000011111111111APRILTAG_36H11_ID_131111111111100000000110010001011011010001101011010110000011011010000101100111110110000000011111111111APRILTAG_36H11_ID_141111111111100000000110010011011010100101101101000110100100011000111101101010010110000000011111111111APRILTAG_36H11_ID_151111111111100000000110010100011010010001100110000110010100011010011001101011100110000000011111111111"
+
+
+xIncrement = 10
+textX = 5.0
+textY = 0.5
+textZ = 0.01
+
+separator = "AP"
+
+generatedCollection = bpy.data.collections.new(name="GeneratedTiles")
+
+whiteTile = bpy.data.objects["Plane.white"]
+blackTile = bpy.data.objects["Plane.black"]
+referenceText = bpy.data.objects["Tag.ref"]
+
+
+
+def emptyGeneratedCollection():
+    print("Emptying generated")
+    meshes = set()
+    for obj in bpy.data.collections["GeneratedTiles"].objects:
+        print("     obj in generated: " + obj.name)
+        bpy.data.objects.remove(obj)
+    print("Done.")
+            
+
+emptyGeneratedCollection()
+
+list = allCodes.split(separator)
+list.pop(0) # Remove empty first element
+
+print(list)
+
+currentX = 0.0
+
+
+# Markers are grouped by 4 for printing
+xGroup = 0
+yGroup = 0
+
+markerIndex = 0
+
+for line in list:
+    #line = separator + line
+    print("line: <" + line + ">")
+    name = line[0: 18]
+    print("name: " + name)
+    
+    markerDx = -20 * (int(markerIndex/2)%2)
+    markerDy = -10 * (int(markerIndex/2)%2)
+    
+    
+    # Create title
+    bpy.ops.object.text_add(enter_editmode=False, location=(0, 0, 0))
+    text_obj = bpy.context.object
+    text_obj.name = name
+    text_obj.data.body = name[13: 18]
+    bpy.ops.object.origin_set(type='GEOMETRY_ORIGIN', center='MEDIAN')
+    text_obj.location[0] = currentX + textX + markerDx
+    text_obj.location[1] = textY + markerDy
+    text_obj.location[2] = textZ
+    material = bpy.data.materials['Mat.Square.Black']
+    bpy.context.object.active_material = material
+    generatedCollection.objects.link(text_obj)
+    
+
+    # Create grid
+    
+    for rowIndex in range(0, 10):
+        
+        row = line[10*rowIndex + 18: 10*rowIndex + 28]
+        print("row: <" + str(row) + ">")
+        
+        yCoord = 10 - rowIndex - 0.5 + markerDy
+        
+        for colIndex in range(0, 10):
+            digit = row[colIndex]
+            xCoord =  currentX + 0.5 + colIndex + markerDx
+            if digit == "0":
+                newTile = blackTile.copy()
+            else:
+                newTile = whiteTile.copy()
+            bpy.context.collection.objects.link(newTile)
+            newTile.location = (xCoord, yCoord, 0)
+    
+    currentX += xIncrement
+    markerIndex += 1
