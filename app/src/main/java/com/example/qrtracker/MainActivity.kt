@@ -55,6 +55,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONArray
 import org.json.JSONObject
+import android.content.Intent
 
 data class OverlayMarker(
     val id: Int,
@@ -769,8 +770,60 @@ fun CameraScreen(openCvReady: Boolean) {
                             gray.put(0, 0, grayBytes)
 
                             // Capture d'une position de la mire sur demande
+
+// Dimensions de l'image caméra
                             calibrationImageWidth.set(width)
                             calibrationImageHeight.set(height)
+
+// Calibration approximative automatique au premier démarrage
+                            if (!calibrationReady.get() && width > 0 && height > 0) {
+                                try {
+                                    synchronized(cameraCalibration) {
+                                        if (!calibrationReady.get()) {
+
+                                            cameraCalibration.useApproximateCalibration(
+                                                Size(width.toDouble(), height.toDouble())
+                                            )
+
+                                            // Publication de la calibration pour VrActivity
+                                            CameraCalibrationState.cameraMatrix =
+                                                cameraCalibration.cameraMatrix.clone()
+
+                                            CameraCalibrationState.distortionCoefficients =
+                                                org.opencv.core.MatOfDouble().apply {
+                                                    fromArray(
+                                                        *cameraCalibration.distortionCoefficients.toArray()
+                                                    )
+                                                }
+
+                                            CameraCalibrationState.imageWidth = width
+                                            CameraCalibrationState.imageHeight = height
+
+                                            CameraCalibrationState.ready.set(true)
+                                            calibrationReady.set(true)
+                                        }
+                                    }
+
+                                    ContextCompat.getMainExecutor(ctx).execute {
+                                        calibrationMessage =
+                                            "Calibration approximative automatique activée."
+                                        markerPoseText = "Calibration approximative active"
+                                    }
+
+                                    android.util.Log.i(
+                                        "QRTracker",
+                                        "Calibration approximative automatique activée"
+                                    )
+
+                                } catch (e: Exception) {
+                                    android.util.Log.e(
+                                        "QRTracker",
+                                        "Erreur de calibration automatique",
+                                        e
+                                    )
+                                }
+                            }
+
 
                             if (captureCalibrationFrame.getAndSet(false)) {
 
@@ -1107,10 +1160,23 @@ fun CameraScreen(openCvReady: Boolean) {
 
                                 val rms = synchronized(cameraCalibration) {
                                     cameraCalibration.calibrate(imageSize)
+
+                                    CameraCalibrationState.cameraMatrix =
+                                        cameraCalibration.cameraMatrix.clone()
+
+                                    CameraCalibrationState.distortionCoefficients =
+                                        org.opencv.core.MatOfDouble().apply {
+                                            fromArray(
+                                                *cameraCalibration.distortionCoefficients.toArray()
+                                            )
+                                        }
+
+                                    CameraCalibrationState.imageWidth = calibrationImageWidth.get()
+                                    CameraCalibrationState.imageHeight = calibrationImageHeight.get()
                                 }
 
-                                calibrationMessage =
-                                    "Calibration réussie. Erreur : $rms pixels"
+                                CameraCalibrationState.ready.set(true)
+                                calibrationMessage = "Calibration réussie..."
                                 calibrationReady.set(true)
 
                                 android.util.Log.i(
@@ -1154,8 +1220,22 @@ fun CameraScreen(openCvReady: Boolean) {
                                         cameraCalibration.useApproximateCalibration(
                                             Size(width.toDouble(), height.toDouble())
                                         )
+
+                                        CameraCalibrationState.cameraMatrix =
+                                            cameraCalibration.cameraMatrix.clone()
+
+                                        CameraCalibrationState.distortionCoefficients =
+                                            org.opencv.core.MatOfDouble().apply {
+                                                fromArray(
+                                                    *cameraCalibration.distortionCoefficients.toArray()
+                                                )
+                                            }
+
+                                        CameraCalibrationState.imageWidth = width
+                                        CameraCalibrationState.imageHeight = height
                                     }
 
+                                    CameraCalibrationState.ready.set(true)
                                     calibrationReady.set(true)
 
                                     calibrationMessage =
@@ -1187,12 +1267,30 @@ fun CameraScreen(openCvReady: Boolean) {
             // Écran principal : aucune interface de calibration visible
             Spacer(modifier = Modifier.height(24.dp))
 
-            Button(
-                onClick = {
-                    showCalibration = true
-                }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("Calibration")
+                Button(
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        showCalibration = true
+                    }
+                ) {
+                    Text("Calibration")
+                }
+
+                Button(
+                    modifier = Modifier.weight(1f),
+                    enabled = CameraCalibrationState.ready.get(),
+                    onClick = {
+                        context.startActivity(
+                            Intent(context, VrActivity::class.java)
+                        )
+                    }
+                ) {
+                    Text("VR")
+                }
             }
 
             Text(
