@@ -25,3 +25,5 @@ dependencyResolutionManagement {
 rootProject.name = "QRTracker"
 include(":app")
  
+include(":cardboard-sdk")
+project(":cardboard-sdk").projectDir = file("cardboard/sdk")

@@ -1,0 +1,4 @@
+[submodule "cardboard"]
+	path = cardboard
+	url = https://github.com/arthurmanoha/cardboard.git
+	branch = qrtracker-fixes

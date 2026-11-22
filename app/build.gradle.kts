@@ -62,4 +62,7 @@ dependencies {
     implementation(libs.opencv)
 
     implementation(libs.androidx.lifecycle.runtime.compose)
+	
+	// Google Cardboard
+	implementation(project(":cardboard-sdk"))
 }
