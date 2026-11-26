@@ -34,8 +34,6 @@ class VrCameraAnalyzer(
 
     private val processing = AtomicBoolean(false)
 
-    private var lastAnalysisTime = 0L
-
     override fun analyze(image: ImageProxy) {
 
         val currentTime = SystemClock.elapsedRealtime()
@@ -48,13 +46,6 @@ class VrCameraAnalyzer(
             "QRTracker2",
             "Horodatage image : $imageTimestamp ns - Âge de l'image : ${(nowTimestamp - imageTimestamp) / 1_000_000} ms"
         )
-
-        if (currentTime - lastAnalysisTime < 1000L) {
-            image.close()
-            return
-        }
-
-        lastAnalysisTime = currentTime
 
         if (!processing.compareAndSet(false, true)) {
             image.close()

@@ -145,34 +145,20 @@ void HelloCardboardApp::OnSurfaceCreated(JNIEnv* env) {
 
   CHECKGLERROR("Obj program params");
 
-  // Géométrie du cube représentant un marqueur.
-  // Cube de 2 cm de côté.
-  const float h = 0.01f;
+  // Géométrie du carré représentant un marqueur.
+  // Carré de 8 cm de côté.
+  const float side = 0.08f;
 
   marker_vertices_ = {
-          -h, -h, -h,  // 0
-          h, -h, -h,  // 1
-          h,  h, -h,  // 2
-          -h,  h, -h,  // 3
-          -h, -h,  h,  // 4
-          h, -h,  h,  // 5
-          h,  h,  h,  // 6
-          -h,  h,  h   // 7
+          -side/2, -side/2, 0,  // 0
+          side/2, -side/2, 0,  // 1
+          side/2, side/2, 0,  // 2
+          -side/2, side/2, 0,  // 3
   };
 
   marker_indices_ = {
-          // Face arrière
-          0, 2, 1, 0, 3, 2,
-          // Face avant
-          4, 5, 6, 4, 6, 7,
-          // Face gauche
-          0, 4, 7, 0, 7, 3,
-          // Face droite
-          1, 2, 6, 1, 6, 5,
-          // Face inférieure
-          0, 1, 5, 0, 5, 4,
-          // Face supérieure
-          3, 7, 6, 3, 6, 2
+          // Carré défini par deux triangles, face visible vers +Z
+          0, 1, 2, 0, 2, 3
   };
 
   HELLOCARDBOARD_CHECK(room_.Initialize(obj_position_param_, obj_uv_param_,
@@ -399,7 +385,24 @@ void HelloCardboardApp::SetMarkers(
 //            marker.position[1],
 //            marker.position[2]);
 //  }
+  // Pour le rendu, le marqueur 0 définit l'origine du monde.
+  for (auto& marker : markers_) {
+    if (marker.id == 0) {
+      marker.position[0] = 0.0f;
+      marker.position[1] = 0.0f;
+      marker.position[2] = 0.0f;
 
+      // Matrice identité.
+      for (int i = 0; i < 9; ++i) {
+        marker.rotation[i] = 0.0f;
+      }
+      marker.rotation[0] = 1.0f;
+      marker.rotation[4] = 1.0f;
+      marker.rotation[8] = 1.0f;
+
+      break;
+    }
+  }
 }
 
 void HelloCardboardApp::OnDrawFrame() {
@@ -706,7 +709,7 @@ void HelloCardboardApp::DrawMarkers(
     model_matrix.m[3][3] = 1.0f;
 
     // Matrice finale de transformation.
-    Matrix4x4 modelview = eye_view * model_matrix;
+    Matrix4x4 modelview = eye_view * GetQrToOpenGlMatrix() * model_matrix;
     Matrix4x4 mvp = projection_matrix * modelview;
 
     std::array<float, 16> mvp_array = mvp.ToGlArray();
