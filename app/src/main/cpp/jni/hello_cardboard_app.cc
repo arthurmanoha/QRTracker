@@ -65,17 +65,23 @@ constexpr const char* kObjVertexShader =
       gl_Position = u_MVP * a_Position;
     })glsl";
 
-constexpr const char* kObjFragmentShader =
-    R"glsl(
+    constexpr const char* kObjFragmentShader =
+            R"glsl(
     precision mediump float;
 
     uniform sampler2D u_Texture;
+    uniform int u_UseTexture;
     varying vec2 v_UV;
 
     void main() {
-      // The y coordinate of this sample's textures is reversed compared to
-      // what OpenGL expects, so we invert the y coordinate.
-      gl_FragColor = texture2D(u_Texture, vec2(v_UV.x, 1.0 - v_UV.y));
+      if (u_UseTexture == 1) {
+        gl_FragColor = texture2D(
+            u_Texture,
+            vec2(v_UV.x, 1.0 - v_UV.y)
+        );
+      } else {
+        gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+      }
     })glsl";
 
 }  // anonymous namespace
@@ -134,8 +140,40 @@ void HelloCardboardApp::OnSurfaceCreated(JNIEnv* env) {
   obj_position_param_ = glGetAttribLocation(obj_program_, "a_Position");
   obj_uv_param_ = glGetAttribLocation(obj_program_, "a_UV");
   obj_modelview_projection_param_ = glGetUniformLocation(obj_program_, "u_MVP");
+  obj_use_texture_param_ =
+          glGetUniformLocation(obj_program_, "u_UseTexture");
 
   CHECKGLERROR("Obj program params");
+
+  // Géométrie du cube représentant un marqueur.
+  // Cube de 2 cm de côté.
+  const float h = 0.01f;
+
+  marker_vertices_ = {
+          -h, -h, -h,  // 0
+          h, -h, -h,  // 1
+          h,  h, -h,  // 2
+          -h,  h, -h,  // 3
+          -h, -h,  h,  // 4
+          h, -h,  h,  // 5
+          h,  h,  h,  // 6
+          -h,  h,  h   // 7
+  };
+
+  marker_indices_ = {
+          // Face arrière
+          0, 2, 1, 0, 3, 2,
+          // Face avant
+          4, 5, 6, 4, 6, 7,
+          // Face gauche
+          0, 4, 7, 0, 7, 3,
+          // Face droite
+          1, 2, 6, 1, 6, 5,
+          // Face inférieure
+          0, 1, 5, 0, 5, 4,
+          // Face supérieure
+          3, 7, 6, 3, 6, 2
+  };
 
   HELLOCARDBOARD_CHECK(room_.Initialize(obj_position_param_, obj_uv_param_,
                                         "CubeRoom.obj", asset_mgr_));
@@ -172,17 +210,210 @@ void HelloCardboardApp::SetScreenParams(int width, int height) {
   screen_params_changed_ = true;
 }
 
+static Matrix4x4 MarkerToMatrix(const VrMarker& marker) {
+
+  Matrix4x4 model_matrix = {};
+
+  // Rotation : conversion du tableau ligne par ligne
+  // vers le stockage m[colonne][ligne].
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      model_matrix.m[row][col] =
+              marker.rotation[col * 3 + row];
+    }
+  }
+
+  // Translation.
+  model_matrix.m[3][0] = marker.position[0];
+  model_matrix.m[3][1] = marker.position[1];
+  model_matrix.m[3][2] = marker.position[2];
+  model_matrix.m[3][3] = 1.0f;
+
+  return model_matrix;
+}
+
+static Matrix4x4 GetOpenCvToCardboardMatrix() {
+
+  Matrix4x4 conversion = {};
+
+  conversion.m[0][0] =  1.0f;
+  conversion.m[1][1] = -1.0f;
+  conversion.m[2][2] = -1.0f;
+  conversion.m[3][3] =  1.0f;
+
+  return conversion;
+}
+
+static Matrix4x4 GetQrToOpenGlMatrix() {
+    Matrix4x4 conversion = {};
+
+    conversion.m[0][0] = 1.0f;
+    conversion.m[2][1] = 1.0f;
+    conversion.m[1][2] = -1.0f;
+    conversion.m[3][3] = 1.0f;
+
+    return conversion;
+}
+
+static Matrix4x4 InvertRigidTransform(const Matrix4x4& transform) {
+    Matrix4x4 inverse = {};
+
+    // Rotation inverse : transposée.
+    for (int col = 0; col < 3; ++col) {
+        for (int row = 0; row < 3; ++row) {
+            inverse.m[col][row] = transform.m[row][col];
+        }
+    }
+
+    // Translation inverse : -R^T * t.
+    const float tx = transform.m[3][0];
+    const float ty = transform.m[3][1];
+    const float tz = transform.m[3][2];
+
+    for (int row = 0; row < 3; ++row) {
+        inverse.m[3][row] = -(
+                inverse.m[0][row] * tx +
+                inverse.m[1][row] * ty +
+                inverse.m[2][row] * tz
+        );
+    }
+
+    inverse.m[3][3] = 1.0f;
+    return inverse;
+}
+
+void HelloCardboardApp::SetMarkers(
+            const std::vector<VrMarker>& markers,
+            int64_t image_timestamp) {
+
+        markers_ = markers;
+        marker_timestamp_ = image_timestamp;
+
+
+
+  const VrMarker* origin_marker = nullptr;
+
+  for (const auto& marker : markers_) {
+    if (marker.id == 0) {
+      origin_marker = &marker;
+      break;
+    }
+  }
+
+  if (origin_marker == nullptr) {
+    __android_log_print(
+            ANDROID_LOG_WARN,
+            "QRTracker2",
+            "Marqueur origine ID=0 absent");
+    return;
+  }
+    // Transformation du marqueur 0 vers la caméra.
+    Matrix4x4 marker_to_camera = MarkerToMatrix(*origin_marker);
+
+// Inversion de la transformation : caméra vers monde QRTracker.
+    Matrix4x4 camera_to_world = {};
+
+// Rotation inverse : transposée de la rotation du marqueur.
+    for (int col = 0; col < 3; ++col) {
+        for (int row = 0; row < 3; ++row) {
+            camera_to_world.m[col][row] =
+                    marker_to_camera.m[row][col];
+        }
+    }
+
+// Position de la caméra dans le repère du marqueur 0.
+    const float tx = marker_to_camera.m[3][0];
+    const float ty = marker_to_camera.m[3][1];
+    const float tz = marker_to_camera.m[3][2];
+
+    camera_to_world.m[3][0] = -(
+            marker_to_camera.m[0][0] * tx +
+            marker_to_camera.m[0][1] * ty +
+            marker_to_camera.m[0][2] * tz);
+
+    camera_to_world.m[3][1] = -(
+            marker_to_camera.m[1][0] * tx +
+            marker_to_camera.m[1][1] * ty +
+            marker_to_camera.m[1][2] * tz);
+
+    camera_to_world.m[3][2] = -(
+            marker_to_camera.m[2][0] * tx +
+            marker_to_camera.m[2][1] * ty +
+            marker_to_camera.m[2][2] * tz);
+
+    camera_to_world.m[3][3] = 1.0f;
+
+// Mémorisation de la pose caméra.
+    camera_world_pose_ = camera_to_world;
+    camera_world_pose_valid_ = true;
+
+    __android_log_print(
+            ANDROID_LOG_DEBUG,
+            "QRTracker2",
+            "Pose caméra QR : x=%.4f y=%.4f z=%.4f",
+            camera_world_pose_.m[3][0],
+            camera_world_pose_.m[3][1],
+            camera_world_pose_.m[3][2]);
+
+    __android_log_print(
+            ANDROID_LOG_DEBUG,
+            "QRTracker2 nnn",
+            "Rotation caméra QR :");
+    for (int row = 0; row < 3; ++row) {
+        __android_log_print(
+                ANDROID_LOG_DEBUG,
+                "QRTracker2 nnn",
+                "%.4f  %.4f  %.4f",
+                camera_world_pose_.m[0][row],
+                camera_world_pose_.m[1][row],
+                camera_world_pose_.m[2][row]);
+    }
+
+//  __android_log_print(
+//          ANDROID_LOG_DEBUG,
+//          "QRTracker2",
+//          "Marqueur origine trouvé : x=%.4f y=%.4f z=%.4f",
+//          origin_marker->position[0],
+//          origin_marker->position[1],
+//          origin_marker->position[2]);
+//
+//  __android_log_print(
+//          ANDROID_LOG_DEBUG,
+//          "QRTracker2",
+//          "Horodatage image stocké : %lld ns",
+//          static_cast<long long>(marker_timestamp_));
+//
+//  __android_log_print(
+//          ANDROID_LOG_DEBUG,
+//          "QRTracker2",
+//          "Marqueurs reçus : %zu",
+//          markers_.size());
+//
+//  for (const auto& marker : markers_) {
+//    __android_log_print(
+//            ANDROID_LOG_DEBUG,
+//            "QRTracker2",
+//            "ID=%d : x=%.4f y=%.4f z=%.4f",
+//            marker.id,
+//            marker.position[0],
+//            marker.position[1],
+//            marker.position[2]);
+//  }
+
+}
+
 void HelloCardboardApp::OnDrawFrame() {
   if (!UpdateDeviceParams()) {
     return;
   }
 
-  // Update Head Pose.
-  head_view_ = GetPose();
-
-  // Incorporate the floor height into the head_view
-  head_view_ =
-      head_view_ * GetTranslationMatrix({0.0f, kDefaultFloorHeight, 0.0f});
+    // Vue calculée à partir de la pose OpenCV du marqueur 0.
+    if (camera_world_pose_valid_) {
+        head_view_ =
+                GetOpenCvToCardboardMatrix() *
+                InvertRigidTransform(camera_world_pose_) *
+                InvertRigidTransform(GetQrToOpenGlMatrix());
+    }
 
   // Bind buffer
   glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
@@ -210,6 +441,8 @@ void HelloCardboardApp::OnDrawFrame() {
 
     // Draw room and target
     DrawWorld();
+
+    DrawMarkers(eye_view, projection_matrix);
   }
 
   // Render
@@ -372,11 +605,39 @@ void HelloCardboardApp::GlTeardown() {
 Matrix4x4 HelloCardboardApp::GetPose() {
   std::array<float, 4> out_orientation;
   std::array<float, 3> out_position;
+
   CardboardHeadTracker_getPose(
-      head_tracker_, GetBootTimeNano() + kPredictionTimeWithoutVsyncNanos,
-      kLandscapeLeft, &out_position[0], &out_orientation[0]);
+          head_tracker_, GetBootTimeNano() + kPredictionTimeWithoutVsyncNanos,
+          kLandscapeLeft, &out_position[0], &out_orientation[0]);
+
+  // Position de la tête
+  for (int i = 0; i < 3; ++i) {
+    head_pose_[i] = out_position[i];
+  }
+
+  // Orientation de la tête : quaternion X, Y, Z, W
+  for (int i = 0; i < 4; ++i) {
+    head_pose_[i + 3] = out_orientation[i];
+  }
+
   return GetTranslationMatrix(out_position) *
          Quatf::FromXYZW(&out_orientation[0]).ToMatrix();
+}
+
+Matrix4x4 HelloCardboardApp::GetPoseAtTimestamp(int64_t timestamp_ns) {
+  std::array<float, 4> out_orientation;
+  std::array<float, 3> out_position;
+
+  CardboardHeadTracker_getPose(
+          head_tracker_,
+          timestamp_ns,
+          kLandscapeLeft,
+          &out_position[0],
+          &out_orientation[0]);
+
+  Quatf rotation = Quatf::FromXYZW(&out_orientation[0]);
+
+  return GetTranslationMatrix(out_position) * rotation.ToMatrix();
 }
 
 void HelloCardboardApp::DrawWorld() {
@@ -386,6 +647,7 @@ void HelloCardboardApp::DrawWorld() {
 
 void HelloCardboardApp::DrawTarget() {
   glUseProgram(obj_program_);
+  glUniform1i(obj_use_texture_param_, 1);
 
   std::array<float, 16> target_array = modelview_projection_target_.ToGlArray();
   glUniformMatrix4fv(obj_modelview_projection_param_, 1, GL_FALSE,
@@ -401,8 +663,73 @@ void HelloCardboardApp::DrawTarget() {
   CHECKGLERROR("DrawTarget");
 }
 
+void HelloCardboardApp::DrawMarkers(
+        Matrix4x4& eye_view,
+        Matrix4x4& projection_matrix) {
+
+  if (markers_.empty()) {
+    return;
+  }
+
+  glUseProgram(obj_program_);
+  glUniform1i(obj_use_texture_param_, 0);
+
+  glEnableVertexAttribArray(obj_position_param_);
+  glVertexAttribPointer(
+          obj_position_param_,
+          3,
+          GL_FLOAT,
+          GL_FALSE,
+          0,
+          marker_vertices_.data());
+
+  glDisableVertexAttribArray(obj_uv_param_);
+  glVertexAttrib2f(obj_uv_param_, 0.0f, 0.0f);
+
+  for (const auto& marker : markers_) {
+
+    Matrix4x4 model_matrix = {};
+
+    // Matrice de rotation.
+    // Les données Kotlin sont stockées en ordre ligne par ligne.
+    for (int row = 0; row < 3; ++row) {
+      for (int col = 0; col < 3; ++col) {
+        model_matrix.m[row][col] =
+                marker.rotation[col * 3 + row];
+      }
+    }
+
+    // Translation.
+    model_matrix.m[3][0] = marker.position[0];
+    model_matrix.m[3][1] = marker.position[1];
+    model_matrix.m[3][2] = marker.position[2];
+    model_matrix.m[3][3] = 1.0f;
+
+    // Matrice finale de transformation.
+    Matrix4x4 modelview = eye_view * model_matrix;
+    Matrix4x4 mvp = projection_matrix * modelview;
+
+    std::array<float, 16> mvp_array = mvp.ToGlArray();
+
+    glUniformMatrix4fv(
+            obj_modelview_projection_param_,
+            1,
+            GL_FALSE,
+            mvp_array.data());
+
+    glDrawElements(
+            GL_TRIANGLES,
+            marker_indices_.size(),
+            GL_UNSIGNED_SHORT,
+            marker_indices_.data());
+  }
+
+  CHECKGLERROR("DrawMarkers");
+}
+
 void HelloCardboardApp::DrawRoom() {
   glUseProgram(obj_program_);
+  glUniform1i(obj_use_texture_param_, 1);
 
   std::array<float, 16> room_array = modelview_projection_room_.ToGlArray();
   glUniformMatrix4fv(obj_modelview_projection_param_, 1, GL_FALSE,

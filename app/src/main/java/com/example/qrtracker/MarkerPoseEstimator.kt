@@ -18,11 +18,18 @@ data class MarkerPose(
     val rotationMatrix: DoubleArray
 )
 
+data class WorldMarkerPose(
+    val x: Double,
+    val y: Double,
+    val z: Double,
+    val rotationMatrix: DoubleArray
+)
+
 class MarkerPoseEstimator {
 
     companion object {
-        // Côté du carré noir extérieur : 10 cm
-        const val MARKER_SIZE = 0.10
+        // Côté du carré noir extérieur : 8 cm
+        const val MARKER_SIZE = 0.08
     }
 
     // Ordre imposé par SOLVEPNP_IPPE_SQUARE :

@@ -18,6 +18,8 @@
 #include <jni.h>
 
 #include <memory>
+#include <cstdint>
+#include <vector>
 
 #include "hello_cardboard_app.h"
 
@@ -84,6 +86,59 @@ JNI_METHOD(void, nativeOnResume)
 JNI_METHOD(void, nativeSetScreenParams)
 (JNIEnv* /*env*/, jobject /*obj*/, jlong native_app, jint width, jint height) {
   native(native_app)->SetScreenParams(width, height);
+}
+
+JNI_METHOD(void, nativeSetMarkers)
+(JNIEnv* env, jobject /*obj*/, jlong native_app,
+ jlong image_timestamp,
+ jintArray ids, jfloatArray positions, jfloatArray rotations) {
+
+  if (native_app == 0 || ids == nullptr ||
+      positions == nullptr || rotations == nullptr) {
+    return;
+  }
+    __android_log_print(
+            ANDROID_LOG_DEBUG,
+            "QRTracker2",
+            "Horodatage image reçu en JNI : %lld ns",
+            static_cast<long long>(image_timestamp));
+
+  const jsize count = env->GetArrayLength(ids);
+
+  if (env->GetArrayLength(positions) != count * 3 ||
+      env->GetArrayLength(rotations) != count * 9) {
+    __android_log_print(
+            ANDROID_LOG_ERROR,
+            "QRTracker2",
+            "Tailles de tableaux JNI invalides");
+    return;
+  }
+
+  std::vector<jint> markerIds(count);
+  std::vector<jfloat> markerPositions(count * 3);
+  std::vector<jfloat> markerRotations(count * 9);
+
+  env->GetIntArrayRegion(ids, 0, count, markerIds.data());
+  env->GetFloatArrayRegion(
+          positions, 0, count * 3, markerPositions.data());
+  env->GetFloatArrayRegion(
+          rotations, 0, count * 9, markerRotations.data());
+
+  std::vector<ndk_hello_cardboard::VrMarker> markers(count);
+
+  for (jsize i = 0; i < count; ++i) {
+    markers[i].id = markerIds[i];
+
+    for (int j = 0; j < 3; ++j) {
+      markers[i].position[j] = markerPositions[i * 3 + j];
+    }
+
+    for (int j = 0; j < 9; ++j) {
+      markers[i].rotation[j] = markerRotations[i * 9 + j];
+    }
+  }
+
+  native(native_app)->SetMarkers(markers, image_timestamp);
 }
 
 JNI_METHOD(void, nativeSwitchViewer)

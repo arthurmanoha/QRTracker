@@ -28,8 +28,15 @@
 #include <GLES2/gl2.h>
 #include "cardboard.h"
 #include "util.h"
+#include <cstdint>
 
 namespace ndk_hello_cardboard {
+
+    struct VrMarker {
+        int id;
+        float position[3];
+        float rotation[9];
+    };
 
 /**
  * This is a sample app for the Cardboard SDK. It loads a simple environment and
@@ -64,6 +71,8 @@ class HelloCardboardApp {
    */
   void SetScreenParams(int width, int height);
 
+  void SetMarkers(const std::vector<VrMarker>& markers, int64_t image_timestamp);
+
   /**
    * Draws the scene. This should be called on the rendering thread.
    */
@@ -89,7 +98,6 @@ class HelloCardboardApp {
    */
   void SwitchViewer();
 
- private:
   /**
    * Default near clip plane z-axis coordinate.
    */
@@ -125,9 +133,21 @@ class HelloCardboardApp {
   Matrix4x4 GetPose();
 
   /**
+   * Gets head's pose at a specific timestamp.
+   *
+   * @param timestamp_ns Image capture timestamp in CLOCK_BOOTTIME.
+   * @return matrix containing head's pose.
+   */
+  Matrix4x4 GetPoseAtTimestamp(int64_t timestamp_ns);
+
+  /**
    * Draws all world-space objects for the given eye.
    */
   void DrawWorld();
+
+
+  void DrawMarkers(Matrix4x4& eye_view,
+                   Matrix4x4& projection_matrix);
 
   /**
    * Draws the target object.
@@ -179,9 +199,14 @@ class HelloCardboardApp {
   GLuint obj_position_param_;
   GLuint obj_uv_param_;
   GLuint obj_modelview_projection_param_;
+  GLuint obj_use_texture_param_;
 
   Matrix4x4 head_view_;
+  Matrix4x4 camera_world_pose_;
+  bool camera_world_pose_valid_ = false;
   Matrix4x4 model_target_;
+  float head_pose_[7] = {0.0f, 0.0f, 0.0f,
+                         1.0f, 0.0f, 0.0f, 0.0f};
 
   Matrix4x4 modelview_projection_target_;
   Matrix4x4 modelview_projection_room_;
@@ -193,6 +218,11 @@ class HelloCardboardApp {
   std::vector<Texture> target_object_not_selected_textures_;
   std::vector<Texture> target_object_selected_textures_;
   int cur_target_object_;
+  std::vector<VrMarker> markers_;
+  int64_t marker_timestamp_ = 0;
+
+  std::vector<float> marker_vertices_;
+  std::vector<unsigned short> marker_indices_;
 };
 
 }  // namespace ndk_hello_cardboard
