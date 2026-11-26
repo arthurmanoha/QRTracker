@@ -218,6 +218,125 @@ static Matrix4x4 MarkerToMatrix(const VrMarker& marker) {
   return model_matrix;
 }
 
+static Quatf MatrixToQuat(const Matrix4x4& m) {
+  // Extraction de la matrice de rotation.
+  // m[colonne][ligne].
+  const float r00 = m.m[0][0];
+  const float r01 = m.m[1][0];
+  const float r02 = m.m[2][0];
+
+  const float r10 = m.m[0][1];
+  const float r11 = m.m[1][1];
+  const float r12 = m.m[2][1];
+
+  const float r20 = m.m[0][2];
+  const float r21 = m.m[1][2];
+  const float r22 = m.m[2][2];
+
+  Quatf q;
+  const float trace = r00 + r11 + r22;
+
+  if (trace > 0.0f) {
+    const float s = 2.0f * sqrtf(trace + 1.0f);
+    q.w = 0.25f * s;
+    q.x = (r21 - r12) / s;
+    q.y = (r02 - r20) / s;
+    q.z = (r10 - r01) / s;
+  } else if (r00 > r11 && r00 > r22) {
+    const float s = 2.0f * sqrtf(1.0f + r00 - r11 - r22);
+    q.w = (r21 - r12) / s;
+    q.x = 0.25f * s;
+    q.y = (r01 + r10) / s;
+    q.z = (r02 + r20) / s;
+  } else if (r11 > r22) {
+    const float s = 2.0f * sqrtf(1.0f + r11 - r00 - r22);
+    q.w = (r02 - r20) / s;
+    q.x = (r01 + r10) / s;
+    q.y = 0.25f * s;
+    q.z = (r12 + r21) / s;
+  } else {
+    const float s = 2.0f * sqrtf(1.0f + r22 - r00 - r11);
+    q.w = (r10 - r01) / s;
+    q.x = (r02 + r20) / s;
+    q.y = (r12 + r21) / s;
+    q.z = 0.25f * s;
+  }
+
+  // Normalisation du quaternion.
+  const float norm = sqrtf(
+          q.x * q.x + q.y * q.y +
+          q.z * q.z + q.w * q.w
+  );
+
+  q.x /= norm;
+  q.y /= norm;
+  q.z /= norm;
+  q.w /= norm;
+
+  return q;
+}
+
+static Quatf Slerp(const Quatf& q0, const Quatf& q1, float alpha) {
+
+  float dot =
+          q0.x * q1.x +
+          q0.y * q1.y +
+          q0.z * q1.z +
+          q0.w * q1.w;
+
+  Quatf target = q1;
+
+  // Choisir le chemin le plus court.
+  if (dot < 0.0f) {
+    dot = -dot;
+    target.x = -target.x;
+    target.y = -target.y;
+    target.z = -target.z;
+    target.w = -target.w;
+  }
+
+  // Éviter les problèmes numériques.
+  if (dot > 1.0f) {
+    dot = 1.0f;
+  }
+
+  Quatf result;
+
+  // Si les rotations sont très proches, interpolation linéaire.
+  if (dot > 0.9995f) {
+    result.x = q0.x + (1.0f - alpha) * (target.x - q0.x);
+    result.y = q0.y + (1.0f - alpha) * (target.y - q0.y);
+    result.z = q0.z + (1.0f - alpha) * (target.z - q0.z);
+    result.w = q0.w + (1.0f - alpha) * (target.w - q0.w);
+  } else {
+    const float theta = acosf(dot);
+    const float sin_theta = sinf(theta);
+
+    const float weight0 = sinf(alpha * theta) / sin_theta;
+    const float weight1 = sinf((1.0f - alpha) * theta) / sin_theta;
+
+    result.x = weight0 * q0.x + weight1 * target.x;
+    result.y = weight0 * q0.y + weight1 * target.y;
+    result.z = weight0 * q0.z + weight1 * target.z;
+    result.w = weight0 * q0.w + weight1 * target.w;
+  }
+
+  // Normaliser le quaternion obtenu.
+  const float norm = sqrtf(
+          result.x * result.x +
+          result.y * result.y +
+          result.z * result.z +
+          result.w * result.w
+  );
+
+  result.x /= norm;
+  result.y /= norm;
+  result.z /= norm;
+  result.w /= norm;
+
+  return result;
+}
+
 static Matrix4x4 GetOpenCvToCardboardMatrix() {
 
   Matrix4x4 conversion = {};
@@ -329,9 +448,42 @@ void HelloCardboardApp::SetMarkers(
 
     camera_to_world.m[3][3] = 1.0f;
 
+// Filtrage passe-bas de la pose caméra.
+  constexpr float alpha = 0.0f;
+
+  if (camera_world_pose_valid_) {
+
+    // Filtrage de la position.
+    for (int i = 0; i < 3; ++i) {
+      camera_to_world.m[3][i] =
+              (1.0f - alpha) * camera_to_world.m[3][i] +
+              alpha * camera_world_pose_.m[3][i];
+    }
+
+    // Filtrage de la rotation par interpolation SLERP.
+    Quatf previous_rotation = MatrixToQuat(camera_world_pose_);
+    Quatf current_rotation = MatrixToQuat(camera_to_world);
+
+    Quatf filtered_rotation = Slerp(
+            previous_rotation,
+            current_rotation,
+            alpha
+    );
+
+    Matrix4x4 rotation_matrix = filtered_rotation.ToMatrix();
+
+    // Recopier uniquement la partie rotation.
+    for (int col = 0; col < 3; ++col) {
+      for (int row = 0; row < 3; ++row) {
+        camera_to_world.m[col][row] =
+                rotation_matrix.m[col][row];
+      }
+    }
+  }
+
 // Mémorisation de la pose caméra.
-    camera_world_pose_ = camera_to_world;
-    camera_world_pose_valid_ = true;
+  camera_world_pose_ = camera_to_world;
+  camera_world_pose_valid_ = true;
 
     __android_log_print(
             ANDROID_LOG_DEBUG,
